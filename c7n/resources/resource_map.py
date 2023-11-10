@@ -195,6 +195,7 @@ ResourceMap = {
   "aws.redshift-snapshot": "c7n.resources.redshift.RedshiftSnapshot",
   "aws.redshift-subnet-group": "c7n.resources.redshift.RedshiftSubnetGroup",
   "aws.resolver-logs": "c7n.resources.route53.ResolverQueryLogConfig",
+  "aws.resolver-rule": "c7n.resources.route53.ResolverRule",
   "aws.rest-account": "c7n.resources.apigw.RestAccount",
   "aws.rest-api": "c7n.resources.apigw.RestApi",
   "aws.rest-client-certificate": "c7n.resources.apigw.RestClientCertificate",

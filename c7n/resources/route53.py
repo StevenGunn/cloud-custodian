@@ -1019,3 +1019,28 @@ class SafeRule(ListItemFilter):
                 type_rule['Type'] = rule_type
                 rules.append(type_rule)
         return rules
+
+@resources.register('resolver-rule')
+class ResolverRule(QueryResourceManager):
+
+    class resource_type(TypeInfo):
+        service = 'route53resolver'
+        arn_type = 'resolver-rule'
+        enum_spec = ('list_resolver_rules', 'ResolverRules', None)
+        name = 'Name'
+        id = 'Id'
+        cfn_type = 'AWS::Route53Resolver::ResolverRule'
+
+    annotation_key = 'c7n:Associations'
+    permissions = (
+        'route53resolver:ListResolverRules',
+        'route53resolver:ListResolverRuleAssociations')
+
+    def augment(self, rules):
+        client = local_session(self.session_factory).client('route53resolver')
+        for r in rules:
+            # r['Tags'] = self.retry(
+            #     client.list_tags_for_resource,
+            #     ResourceArn=r['Arn'])['Tags']
+            r[self.annotation_key] = client.list_resolver_rule_associations().get('ResolverRuleAssociations')
+        return rules
