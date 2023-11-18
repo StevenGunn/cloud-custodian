@@ -1031,16 +1031,121 @@ class ResolverRule(QueryResourceManager):
         id = 'Id'
         cfn_type = 'AWS::Route53Resolver::ResolverRule'
 
-    annotation_key = 'c7n:Associations'
+    annotation_key = 'c7n:VPCAssociations'
     permissions = (
         'route53resolver:ListResolverRules',
         'route53resolver:ListResolverRuleAssociations')
 
     def augment(self, rules):
         client = local_session(self.session_factory).client('route53resolver')
+        associations = client.list_resolver_rule_associations().get('ResolverRuleAssociations')
+        associationsMap = {}
+        for a in associations:
+            if a['ResolverRuleId'] in associationsMap:
+                associationsMap[a['ResolverRuleId']] += [a]
+            else:
+                associationsMap[a['ResolverRuleId']] = [a]
         for r in rules:
-            # r['Tags'] = self.retry(
-            #     client.list_tags_for_resource,
-            #     ResourceArn=r['Arn'])['Tags']
-            r[self.annotation_key] = client.list_resolver_rule_associations().get('ResolverRuleAssociations')
+            r[self.annotation_key] = []
+            if r['Id'] in associationsMap:
+                r[self.annotation_key] += associationsMap[r['Id']]
+
         return rules
+
+
+@ResolverRule.action_registry.register('associate-vpc')
+class AssociateVPC(BaseAction):
+    """Associates VPC to Route53 Resolver Rules
+
+    :example:
+
+    .. code-block:: yaml
+
+        policies:
+          - name: r53-resolver-rules-vpc-associate
+            resource: resolver-rule
+            filters:
+              - type: value
+                key: 'Name'
+                op: eq
+                value: "Test-rule"
+            actions:
+              - type: associate-vpc
+                vpcid: all
+
+    """
+    permissions = (
+        'route53resolver:ListResolverRules',
+        'route53resolver:ListResolverRuleAssociations',
+        'route53resolver:AssociateResolverRule')
+    schema = type_schema('associate-vpc', vpcid={'type': 'string',
+        'pattern': '^(?:vpc-[0-9a-f]{8,17}|all)$'}, required=['vpcid'])
+    RelatedResource = 'c7n.resources.vpc.Vpc'
+    RelatedIdsExpression = 'ResourceArn'
+
+    def get_vpc_id(self):
+        vpcs = RelatedResourceFilter.get_resource_manager(self).resources()
+        if self.data.get('vpcid') == 'all':
+            vpc_ids = [v['VpcId'] for v in vpcs]
+        else:
+            vpc_ids = [self.data.get('vpcid')]
+        return vpc_ids
+
+    def is_associated(self, resource, vpc_id):
+        associated = False
+        for association in resource['c7n:VPCAssociations']:
+            if association['VPCId'] == vpc_id:
+                associated = True
+                break
+        return associated
+
+    def process(self, resources):
+        client = local_session(self.manager.session_factory).client('route53resolver')
+        vpc_ids = self.get_vpc_id()
+
+        for resource in resources:
+            for vpc_id in vpc_ids:
+                if not self.is_associated(resource, vpc_id):
+                    client.associate_resolver_rule(
+                        ResolverRuleId=resource['Id'],
+                        Name="System Rule Association",
+                        VPCId=vpc_id)
+                    
+@ResolverRule.filter_registry.register('is-associated')
+class VPCAssociationsFilter(Filter):
+    """ Checks VPC Associations for Route53 Resolver Rules.
+
+    :example:
+
+    .. code-block:: yaml
+
+        policies:
+          - name: r53-resolver-rules-vpc-associations
+            resource: resolver-rules
+            filters:
+              - type: is-associated
+                vpcid: "vpc-12345678912345678"
+
+    """
+    permissions = (
+        'route53resolver:ListResolverRules',
+        'route53resolver:ListResolverRuleAssociations')
+    schema = type_schema('is-associated',
+        vpcid={'type': 'string', 'pattern': '^(?:vpc-[0-9a-f]{8,17}|all)$'},)
+    RelatedResource = 'c7n.resources.vpc.Vpc'
+    RelatedIdsExpression = 'ResourceArn'
+
+    def process(self, resources, event=None):
+        results = []
+        vpc_ids = AssociateVPC.get_vpc_id(self)
+        for resource in resources:
+            status = True
+            for vpc_id in vpc_ids:
+                if not AssociateVPC.is_associated(self, resource, vpc_id):
+                    status = False
+                    break
+
+            if status:
+                results.append(resource)
+
+        return results
